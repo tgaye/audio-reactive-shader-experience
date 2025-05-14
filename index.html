@@ -1,0 +1,723 @@
+<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Reactive Shader Experience</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Arial', sans-serif;
+        }
+        #canvas-container {
+            width: 100%;
+            max-width: 1200px;
+            height: 100vh;
+            margin: 0 auto;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+        canvas {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+            max-width: 250px;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        #ui-panel.collapsed {
+            width: 40px;
+            height: 40px;
+            overflow: hidden;
+        }
+        #ui-panel h3 {
+            margin-top: 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding-bottom: 10px;
+        }
+        .control-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            opacity: 0.8;
+        }
+        input[type="range"] {
+            width: 100%;
+        }
+        .value-display {
+            font-size: 11px;
+            text-align: right;
+            opacity: 0.6;
+        }
+        button {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 5px;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+        button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        button.active {
+            background: rgba(100, 200, 255, 0.3);
+            border-color: rgba(100, 200, 255, 0.5);
+        }
+        #toggle-ui {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #audio-source {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        #error-message {
+            color: white;
+            text-align: center;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+    </style>
+
+<base target="_self">
+
+
+    </head><body><div id="canvas-container">
+        <div id="error-message"></div>
+    </div>
+
+    <div id="ui-panel">
+        <button id="toggle-ui">≡</button>
+        <h3>Audio Reactive Shader</h3>
+        
+        <div class="control-group">
+            <label for="style-select">Visual Style</label>
+            <div>
+                <button class="style-btn" data-style="0">Liquid</button>
+                <button class="style-btn" data-style="1">Neural</button>
+                <button class="style-btn" data-style="2">Fractal</button>
+                <button class="style-btn" data-style="3">Retro</button>
+            </div>
+        </div>
+        
+        <div class="control-group">
+            <label for="color-mode">Color Mode</label>
+            <div>
+                <button class="color-btn" data-mode="0">Rainbow</button>
+                <button class="color-btn" data-mode="1">Mono</button>
+                <button class="color-btn" data-mode="2">Duo</button>
+            </div>
+        </div>
+        
+        <div class="control-group">
+            <label for="bass-response">Bass Response <span class="value-display" id="bass-value">1.0</span></label>
+            <input type="range" id="bass-response" min="0" max="2" step="0.1" value="1.0">
+        </div>
+        
+        <div class="control-group">
+            <label for="treble-response">Treble Response <span class="value-display" id="treble-value">1.0</span></label>
+            <input type="range" id="treble-response" min="0" max="2" step="0.1" value="1.0">
+        </div>
+        
+        <div class="control-group">
+            <label for="speed">Speed <span class="value-display" id="speed-value">1.0</span></label>
+            <input type="range" id="speed" min="0.1" max="2" step="0.1" value="1.0">
+        </div>
+        
+        <div class="control-group">
+            <label for="complexity">Complexity <span class="value-display" id="complexity-value">5</span></label>
+            <input type="range" id="complexity" min="1" max="10" step="1" value="5">
+        </div>
+        
+        <div id="audio-source">
+            <label>Audio Source</label>
+            <div>
+                <button id="file-btn">File</button>
+                <button id="mic-btn">Mic</button>
+            </div>
+            <input type="file" id="audio-upload" accept="audio/*" style="display: none;">
+        </div>
+    </div>
+
+    <script>
+        // Check for WebGL support
+        if (!WebGLRenderingContext) {
+            document.getElementById('error-message').innerHTML = 
+                '<h2>WebGL Not Supported</h2><p>Your browser does not support WebGL. Please try with a modern browser like Chrome, Firefox or Edge.</p>';
+            throw new Error('WebGL not supported');
+        }
+
+        // Main Three.js variables
+        let scene, camera, renderer, material, mesh, audioContext, analyser, dataArray, audioSource;
+        let fftSize = 256;
+        let isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        
+        // Audio analysis data
+        let bassLevel = 0;
+        let midLevel = 0;
+        let trebleLevel = 0;
+        let volume = 0;
+        
+        // Shader parameters
+        let shaderParams = {
+            style: 0,
+            colorMode: 0,
+            bassResponse: 1.0,
+            trebleResponse: 1.0,
+            speed: 1.0,
+            complexity: 5,
+            mouseX: 0.5,
+            mouseY: 0.5,
+            time: 0
+        };
+        
+        // Initialize Three.js scene
+        function init() {
+            // Create scene
+            scene = new THREE.Scene();
+            
+            // Create camera
+            camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
+            
+            // Create renderer
+            const container = document.getElementById('canvas-container');
+            const maxWidth = 1200;
+            const aspectRatio = 16/9;
+            const width = Math.min(window.innerWidth, maxWidth);
+            const height = width / aspectRatio;
+            
+            renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                powerPreference: "high-performance"
+            });
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, isMobile ? 1 : 2));
+            container.appendChild(renderer.domElement);
+            
+            // Create shader material
+            material = new THREE.ShaderMaterial({
+                uniforms: {
+                    resolution: { value: new THREE.Vector2(width, height) },
+                    mouse: { value: new THREE.Vector2(0.5, 0.5) },
+                    time: { value: 0 },
+                    bass: { value: 0 },
+                    mid: { value: 0 },
+                    treble: { value: 0 },
+                    volume: { value: 0 },
+                    style: { value: 0 },
+                    colorMode: { value: 0 },
+                    bassResponse: { value: 1.0 },
+                    trebleResponse: { value: 1.0 },
+                    speed: { value: 1.0 },
+                    complexity: { value: 5 }
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    precision highp float;
+                    
+                    uniform vec2 resolution;
+                    uniform vec2 mouse;
+                    uniform float time;
+                    uniform float bass;
+                    uniform float mid;
+                    uniform float treble;
+                    uniform float volume;
+                    uniform int style;
+                    uniform int colorMode;
+                    uniform float bassResponse;
+                    uniform float trebleResponse;
+                    uniform float speed;
+                    uniform float complexity;
+                    
+                    varying vec2 vUv;
+                    
+                    // Common utility functions
+                    float rand(vec2 n) {
+                        return fract(sin(n.x * 100.0 + n.y * 6574.0) * 5647.0);
+                    }
+                    
+                    float noise(vec2 p) {
+                        vec2 ip = floor(p);
+                        vec2 u = fract(p);
+                        u = u*u*(3.0-2.0*u);
+                        
+                        float res = mix(
+                            mix(rand(ip), rand(ip+vec2(1.0,0.0)), u.x),
+                            mix(rand(ip+vec2(0.0,1.0)), rand(ip+vec2(1.0,1.0)), u.x), 
+                            u.y);
+                        return res*res;
+                    }
+                    
+                    // Style 0: Liquid Morphology
+                    vec3 liquidEffect(vec2 uv, float time, float bass, float mid, float treble) {
+                        vec2 p = uv * 2.0 - 1.0;
+                        p.x *= resolution.x / resolution.y;
+                        
+                        float radius = length(p) * 2.0;
+                        float angle = atan(p.y, p.x);
+                        
+                        // Audio-reactive distortion
+                        float distortion = 0.5 + bass * bassResponse * 2.0;
+                        radius += sin(angle * 5.0 + time * speed * 0.5) * 0.1 * distortion;
+                        radius += sin(angle * 8.0 + time * speed * 0.3) * 0.05 * distortion;
+                        
+                        // Color based on position and audio
+                        vec3 color;
+                        if (colorMode == 0) {
+                            // Rainbow mode
+                            float hue = angle / 6.283 + time * 0.1 + mid * 0.2;
+                            color = 0.5 + 0.5 * cos(hue + vec3(0.0, 2.094, 4.188));
+                        } else if (colorMode == 1) {
+                            // Monochrome mode
+                            float lum = 0.5 + 0.5 * sin(time * 0.3 + mid * 2.0);
+                            color = vec3(lum);
+                        } else {
+                            // Duo-tone mode
+                            float t = 0.5 + 0.5 * sin(time * 0.2 + bass * 3.0);
+                            color = mix(vec3(0.2, 0.5, 1.0), vec3(1.0, 0.5, 0.2), t);
+                        }
+                        
+                        // Pulsing center based on bass
+                        float center = smoothstep(0.3 + bass * 0.5, 0.2 + bass * 0.5, radius);
+                        
+                        // Glow based on treble
+                        float glow = treble * trebleResponse * 0.5 / (0.01 + abs(radius - 0.7));
+                        
+                        return mix(color * center, vec3(1.0), glow);
+                    }
+                    
+                    // Style 1: Neural Webs
+                    vec3 neuralEffect(vec2 uv, float time, float bass, float mid, float treble) {
+                        vec2 p = uv * complexity;
+                        float t = time * speed * 0.5;
+                        
+                        // Create network of points
+                        vec2 gv = fract(p) - 0.5;
+                        vec2 id = floor(p);
+                        
+                        float n = noise(id + t * 0.1);
+                        vec2 nodePos = vec2(sin(n * 6.3), cos(n * 6.3)) * 0.4;
+                        
+                        // Connect nodes
+                        float distToNode = length(gv - nodePos);
+                        float connection = smoothstep(0.3, 0.29, distToNode);
+                        
+                        // Audio-reactive pulsing
+                        connection += (bass * bassResponse * 0.5) * smoothstep(0.4, 0.39, distToNode);
+                        
+                        // Color based on mode
+                        vec3 color;
+                        if (colorMode == 0) {
+                            // Rainbow
+                            float hue = n + t * 0.1 + mid * 0.3;
+                            color = 0.5 + 0.5 * cos(hue + vec3(0.0, 2.1, 4.2));
+                        } else if (colorMode == 1) {
+                            // Monochrome
+                            color = vec3(connection);
+                        } else {
+                            // Duo-tone
+                            color = mix(vec3(0.0, 0.8, 0.5), vec3(0.8, 0.0, 0.5), fract(n + t * 0.05));
+                        }
+                        
+                        // Add glow from treble
+                        color += treble * trebleResponse * 0.3 * smoothstep(0.5, 0.0, distToNode);
+                        
+                        return color * connection;
+                    }
+                    
+                    // Style 2: Crystalline Fractals
+                    vec3 fractalEffect(vec2 uv, float time, float bass, float mid, float treble) {
+                        vec2 p = uv * 2.0 - 1.0;
+                        p.x *= resolution.x / resolution.y;
+                        
+                        // Audio-reactive zoom
+                        float zoom = 1.0 + bass * bassResponse * 2.0;
+                        p *= zoom;
+                        
+                        // Fractal parameters
+                        int iterations = int(5.0 + complexity * 1.5);
+                        vec2 c = vec2(sin(time * speed * 0.1), cos(time * speed * 0.13));
+                        c += vec2(mid * 0.2, treble * 0.1);
+                        
+                        vec2 z = p;
+                        float smoothcolor = 0.0;
+                        float power = 8.0;
+                        
+                        // Fractal calculation
+                        for(int i = 0; i < 100; i++) {
+                            if(i > iterations) break;
+                            
+                            // Complex number operations
+                            float x = (z.x * z.x - z.y * z.y) + c.x;
+                            float y = (z.y * z.x + z.x * z.y) + c.y;
+                            
+                            // Audio perturbation
+                            if(i % 3 == 0) {
+                                x += bass * 0.1 * bassResponse;
+                                y += treble * 0.05 * trebleResponse;
+                            }
+                            
+                            z.x = x;
+                            z.y = y;
+                            
+                            // Distance estimation
+                            float d = dot(z, z);
+                            if(d > 4.0) {
+                                smoothcolor = float(i) - log2(log2(d)) + 4.0;
+                                break;
+                            }
+                        }
+                        
+                        // Color based on mode
+                        vec3 color;
+                        if(colorMode == 0) {
+                            // Rainbow
+                            float hue = smoothcolor / float(iterations) + time * 0.05;
+                            color = 0.5 + 0.5 * cos(hue + vec3(0.0, 2.094, 4.188));
+                        } else if(colorMode == 1) {
+                            // Monochrome
+                            float t = smoothcolor / float(iterations);
+                            color = vec3(t);
+                        } else {
+                            // Duo-tone
+                            float t = fract(smoothcolor * 0.1 + time * 0.05 + mid * 0.3);
+                            color = mix(vec3(0.1, 0.3, 0.8), vec3(0.8, 0.1, 0.3), t);
+                        }
+                        
+                        return color;
+                    }
+                    
+                    // Style 3: Retro Wave Grids
+                    vec3 retroEffect(vec2 uv, float time, float bass, float mid, float treble) {
+                        vec2 p = uv;
+                        p.x *= resolution.x / resolution.y;
+                        
+                        // Grid pattern
+                        float gridSize = 0.05 + 0.04 * sin(time * speed * 0.2) + bass * 0.02 * bassResponse;
+                        vec2 grid = fract(p / gridSize);
+                        
+                        // Audio-reactive distortion
+                        float distort = bass * bassResponse * 0.5;
+                        grid.x += sin(time * speed + p.y * 10.0) * 0.1 * distort;
+                        grid.y += cos(time * speed * 0.7 + p.x * 8.0) * 0.1 * distort;
+                        
+                        // Create scanlines
+                        float scanline = sin(p.y * resolution.y * 1.5 + time * speed * 3.0) * 0.5 + 0.5;
+                        scanline = pow(scanline, 5.0 + treble * trebleResponse * 3.0);
+                        
+                        // Color based on mode
+                        vec3 color;
+                        if(colorMode == 0) {
+                            // Rainbow
+                            float hue = p.x + time * 0.1 + mid * 0.3;
+                            color = 0.5 + 0.5 * cos(hue + vec3(0.0, 2.094, 4.188));
+                        } else if(colorMode == 1) {
+                            // Monochrome (green)
+                            color = vec3(0.0, scanline * 0.8, 0.0);
+                        } else {
+                            // Duo-tone (purple/blue)
+                            float t = 0.5 + 0.5 * sin(time * 0.3 + bass * 3.0);
+                            color = mix(vec3(0.5, 0.0, 0.8), vec3(0.0, 0.5, 0.8), t) * scanline;
+                        }
+                        
+                        // Add grid lines
+                        float line = smoothstep(0.02, 0.019, min(grid.x, grid.y));
+                        color = mix(color, vec3(1.0), line);
+                        
+                        // Add glow from audio
+                        color += vec3(mid * 0.3, treble * 0.2, bass * 0.3) * (1.0 - scanline);
+                        
+                        return color;
+                    }
+                    
+                    void main() {
+                        vec2 uv = vUv;
+                        
+                        // Apply mouse interaction
+                        uv += (mouse - 0.5) * 0.05;
+                        
+                        vec3 color;
+                        
+                        // Select style based on uniform
+                        if(style == 0) {
+                            color = liquidEffect(uv, time, bass, mid, treble);
+                        } else if(style == 1) {
+                            color = neuralEffect(uv, time, bass, mid, treble);
+                        } else if(style == 2) {
+                            color = fractalEffect(uv, time, bass, mid, treble);
+                        } else {
+                            color = retroEffect(uv, time, bass, mid, treble);
+                        }
+                        
+                        // Add overall volume-based brightness
+                        color *= 0.8 + volume * 0.5;
+                        
+                        gl_FragColor = vec4(color, 1.0);
+                    }
+                `
+            });
+            
+            // Create fullscreen quad
+            const geometry = new THREE.PlaneGeometry(2, 2);
+            mesh = new THREE.Mesh(geometry, material);
+            scene.add(mesh);
+            
+            // Initialize audio
+            initAudio();
+            
+            // Setup UI events
+            setupUI();
+            
+            // Start animation loop
+            animate();
+            
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize);
+        }
+        
+        // Initialize audio context and analyzer
+        function initAudio() {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = fftSize;
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                
+                // Setup file upload
+                document.getElementById('file-btn').addEventListener('click', () => {
+                    document.getElementById('audio-upload').click();
+                });
+                
+                document.getElementById('audio-upload').addEventListener('change', (e) => {
+                    if (e.target.files[0]) {
+                        const file = e.target.files[0];
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                            audioContext.decodeAudioData(event.target.result, (buffer) => {
+                                if (audioSource) {
+                                    audioSource.disconnect();
+                                    if (audioSource.stop) audioSource.stop();
+                                }
+                                audioSource = audioContext.createBufferSource();
+                                audioSource.buffer = buffer;
+                                audioSource.connect(analyser);
+                                audioSource.connect(audioContext.destination); // This enables sound playback!
+                                audioSource.loop = true;
+                                audioSource.start(0);
+                            });
+                        };
+                        reader.readAsArrayBuffer(e.target.files[0]);
+                    }
+                });
+                
+                // Setup microphone
+                document.getElementById('mic-btn').addEventListener('click', () => {
+                    navigator.mediaDevices.getUserMedia({audio: true})
+                        .then(stream => {
+                            if (audioSource) {
+                                audioSource.disconnect();
+                                if (audioSource.stop) audioSource.stop();
+                            }
+                            audioSource = audioContext.createMediaStreamSource(stream);
+                            audioSource.connect(analyser);
+                            // Don't connect to destination for microphone to prevent feedback
+                        })
+                        .catch(err => {
+                            console.error('Microphone access error:', err);
+                            document.getElementById('error-message').textContent = 
+                                'Microphone access denied. Please allow microphone access to use this feature.';
+                        });
+                });
+            } catch (e) {
+                console.error('Audio initialization error:', e);
+                document.getElementById('error-message').textContent = 
+                    'Audio features are not available in your browser. Visualization will run without audio reactivity.';
+            }
+        }
+        
+        // Setup UI event listeners
+        function setupUI() {
+            // Style buttons
+            document.querySelectorAll('.style-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    shaderParams.style = parseInt(btn.dataset.style);
+                    material.uniforms.style.value = shaderParams.style;
+                });
+            });
+            
+            // Color mode buttons
+            document.querySelectorAll('.color-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    shaderParams.colorMode = parseInt(btn.dataset.mode);
+                    material.uniforms.colorMode.value = shaderParams.colorMode;
+                });
+            });
+            
+            // Sliders
+            document.getElementById('bass-response').addEventListener('input', (e) => {
+                shaderParams.bassResponse = parseFloat(e.target.value);
+                material.uniforms.bassResponse.value = shaderParams.bassResponse;
+                document.getElementById('bass-value').textContent = shaderParams.bassResponse.toFixed(1);
+            });
+            
+            document.getElementById('treble-response').addEventListener('input', (e) => {
+                shaderParams.trebleResponse = parseFloat(e.target.value);
+                material.uniforms.trebleResponse.value = shaderParams.trebleResponse;
+                document.getElementById('treble-value').textContent = shaderParams.trebleResponse.toFixed(1);
+            });
+            
+            document.getElementById('speed').addEventListener('input', (e) => {
+                shaderParams.speed = parseFloat(e.target.value);
+                material.uniforms.speed.value = shaderParams.speed;
+                document.getElementById('speed-value').textContent = shaderParams.speed.toFixed(1);
+            });
+            
+            document.getElementById('complexity').addEventListener('input', (e) => {
+                shaderParams.complexity = parseFloat(e.target.value);
+                material.uniforms.complexity.value = shaderParams.complexity;
+                document.getElementById('complexity-value').textContent = shaderParams.complexity;
+            });
+            
+            // Mouse interaction
+            document.addEventListener('mousemove', (e) => {
+                shaderParams.mouseX = e.clientX / window.innerWidth;
+                shaderParams.mouseY = 1.0 - (e.clientY / window.innerHeight);
+                material.uniforms.mouse.value.set(shaderParams.mouseX, shaderParams.mouseY);
+            });
+            
+            // Touch interaction
+            document.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                shaderParams.mouseX = e.touches[0].clientX / window.innerWidth;
+                shaderParams.mouseY = 1.0 - (e.touches[0].clientY / window.innerHeight);
+                material.uniforms.mouse.value.set(shaderParams.mouseX, shaderParams.mouseY);
+            });
+            
+            // Toggle UI panel
+            document.getElementById('toggle-ui').addEventListener('click', () => {
+                document.getElementById('ui-panel').classList.toggle('collapsed');
+            });
+            
+            // Activate first style and color buttons by default
+            document.querySelector('.style-btn[data-style="0"]').classList.add('active');
+            document.querySelector('.color-btn[data-mode="0"]').classList.add('active');
+        }
+        
+        // Update audio analysis
+        function updateAudio() {
+            if (!analyser || !dataArray) return;
+            
+            analyser.getByteFrequencyData(dataArray);
+            
+            // Calculate frequency bands
+            let bassSum = 0;
+            let midSum = 0;
+            let trebleSum = 0;
+            let totalSum = 0;
+            
+            const bassEnd = Math.floor(dataArray.length * 0.1);
+            const midEnd = Math.floor(dataArray.length * 0.5);
+            
+            for (let i = 0; i < dataArray.length; i++) {
+                const value = dataArray[i] / 255;
+                totalSum += value;
+                
+                if (i < bassEnd) {
+                    bassSum += value;
+                } else if (i < midEnd) {
+                    midSum += value;
+                } else {
+                    trebleSum += value;
+                }
+            }
+            
+            // Normalize and smooth values
+            bassLevel = bassSum / bassEnd;
+            midLevel = midSum / (midEnd - bassEnd);
+            trebleLevel = trebleSum / (dataArray.length - midEnd);
+            volume = totalSum / dataArray.length;
+            
+            // Update shader uniforms
+            material.uniforms.bass.value = bassLevel;
+            material.uniforms.mid.value = midLevel;
+            material.uniforms.treble.value = trebleLevel;
+            material.uniforms.volume.value = volume;
+        }
+        
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Update time
+            shaderParams.time += 0.01;
+            material.uniforms.time.value = shaderParams.time;
+            
+            // Update audio analysis
+            updateAudio();
+            
+            // Render scene
+            renderer.render(scene, camera);
+        }
+        
+        // Handle window resize
+        function onWindowResize() {
+            const container = document.getElementById('canvas-container');
+            const maxWidth = 1200;
+            const aspectRatio = 16/9;
+            const width = Math.min(window.innerWidth, maxWidth);
+            const height = width / aspectRatio;
+            
+            renderer.setSize(width, height);
+            material.uniforms.resolution.value.set(width, height);
+        }
+        
+        // Start the application
+        init();
+    </script>
+
+              
+          
+                
+          
+              
+</body></html>
